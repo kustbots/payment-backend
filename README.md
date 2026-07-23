@@ -29,6 +29,7 @@ Key ones frontend/infra teams should know about:
 - `OXAPAY_API_KEY`, `OXAPAY_CALLBACK_URL` — OxaPay merchant key and the public URL OxaPay should POST payment confirmations to (`/api/payments/oxapay/webhook`).
 - `CLAIMER_API_URL`, `API_CLAIMER_AUTH_URL`, `CLAIMER_ADMIN_TOKEN`, `API_CLAIMER_DEPLOYERS` — the external product-fulfillment services this backend calls after a purchase is confirmed.
 - `ADMIN_BOOTSTRAP_EMAIL` — the one email address that is auto-promoted to `role: "admin"` on registration. After that, promote further admins by setting `role: "admin"` directly on their user document in MongoDB.
+- `TELEGRAM_AUTH_BOT_TOKEN` / `TELEGRAM_AUTH_BOT_USERNAME` — a bot created via [@BotFather](https://t.me/BotFather), used for the passwordless "log in with Telegram" flow (see `docs/API.md`). `TELEGRAM_WEBHOOK_BASE_URL` must be this app's own public URL so the app can register itself with Telegram at startup; `TELEGRAM_WEBHOOK_SECRET` is a random string you pick, used to verify incoming Telegram webhook calls are genuine. Leaving these blank simply disables Telegram login (email/password keeps working).
 
 ## Deploying (Koyeb / Render)
 

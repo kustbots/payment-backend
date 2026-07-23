@@ -7,6 +7,7 @@ Base URL: `https://<your-deployment-host>` (locally: `http://localhost:8000`). E
 - [Auth model](#auth-model)
 - [Errors](#errors)
 - [Auth endpoints](#auth-endpoints)
+- [Telegram login endpoints](#telegram-login-endpoints)
 - [Wallet endpoints](#wallet-endpoints)
 - [Subscription endpoints](#subscription-endpoints)
 - [Payment endpoints](#payment-endpoints)
@@ -19,12 +20,19 @@ Base URL: `https://<your-deployment-host>` (locally: `http://localhost:8000`). E
 
 ## Auth model
 
-This API uses its own email/password + JWT accounts — **independent of any other identity system**. There is no linked Telegram account, no OAuth.
+This API supports two independent ways to get a JWT token pair:
 
-1. `POST /api/auth/register` and `POST /api/auth/login` return an `access_token` and a `refresh_token`.
+1. **Email/password** (`/api/auth/register` + `/api/auth/login`) — traditional accounts.
+2. **Telegram login** (`/api/auth/telegram/*`) — no password at all; the user proves who they are by tapping Start on a Telegram deep link. See [Telegram login endpoints](#telegram-login-endpoints) below.
+
+Both paths end the same way:
+
+1. You get back an `access_token` and a `refresh_token`.
 2. Send the access token on every authenticated request: `Authorization: Bearer <access_token>`.
 3. Access tokens expire in ~30 minutes (`ACCESS_TOKEN_EXPIRE_MINUTES`). When one expires (you'll get a `401`), call `POST /api/auth/refresh` with the refresh token to get a new pair. Refresh tokens last ~14 days (`REFRESH_TOKEN_EXPIRE_DAYS`).
 4. There is no logout/revocation endpoint in this version — tokens are valid until they expire. Don't build a "sign out everywhere" feature against this API yet; ask backend if you need it.
+
+An account created via Telegram login has no `email`/password — `GET /api/wallet/balance` etc. all still work identically once you have a token, regardless of which method created the account.
 
 ## Errors
 
@@ -84,7 +92,38 @@ Response `200`: same shape as login — a fresh access + refresh token pair.
 
 ---
 
-## Wallet endpoints
+## Telegram login endpoints
+
+Passwordless login/registration via Telegram: your frontend never sees or handles an OTP code — the user proves ownership of a Telegram account by tapping **Start** on a deep link, and the account (new or existing) is created/logged-in automatically.
+
+### `POST /api/auth/telegram/start` — public
+No request body. Response `200`:
+```json
+{
+  "token": "yFNDRH28l9cRRuPHWHlcEb2cE_iWhjB4",
+  "deep_link": "https://t.me/YourBotUsername?start=yFNDRH28l9cRRuPHWHlcEb2cE_iWhjB4",
+  "expires_in": 600
+}
+```
+Show the user a "Continue with Telegram" button/link pointing at `deep_link` (opens the Telegram app), with instructions to tap **Start** there. Then start polling the status endpoint below using `token`. `expires_in` is seconds until the link stops working (default 600 = 10 min).
+
+`409` if Telegram login isn't configured on the server yet (no bot token/username set).
+
+### `GET /api/auth/telegram/status/{token}` — public
+Poll this every ~2 seconds while showing the user the deep link. Response `200`:
+```json
+{ "status": "pending", "access_token": null, "refresh_token": null, "token_type": null }
+```
+- `status: "pending"` — user hasn't tapped Start yet; keep polling.
+- `status: "completed"` — done! `access_token`/`refresh_token`/`token_type` are populated exactly like a normal login response — store them and treat the user as logged in.
+- `status: "expired"` — the 10-minute window passed with no Start tap; call `/start` again to get a fresh link.
+
+`404` if `token` is unrecognized (e.g. typo, or you're polling after a server-side data reset).
+
+### `POST /api/auth/telegram/webhook`
+**Not for frontend use.** This is Telegram's server-to-server callback (registered automatically at server startup via `setWebhook`, verified via a secret token header Telegram echoes back on every request). Calling it directly without that header returns `401`.
+
+**What happens automatically when the user taps Start:** Telegram delivers a `/start <token>` message to our bot here. The backend looks up the pending request by `token`; if valid, it looks up or creates a user matched by the sender's Telegram numeric ID (auto-filling `telegram_username` from their Telegram profile — no name/email typed anywhere), marks the login request `completed`, and sends the user a "✅ You're logged in!" confirmation message back in Telegram. First-time Telegram users get a brand-new account with 0 points, same as a fresh email registration.
 
 Points are this app's internal currency. 1 point == 1 USD equivalent (matches the pricing tables below).
 
@@ -247,6 +286,11 @@ All require the caller's account to have `role: "admin"` (403 otherwise). There'
 
 ### C) Buy a subscription plan with crypto
 Same as (A) but call `POST /api/subscriptions/purchase/crypto` instead of the bundle endpoint, then poll for payment confirmation — the subscription appears in `GET /api/subscriptions/me` once paid.
+
+### D) Log in with Telegram instead of email/password
+1. `POST /api/auth/telegram/start` → show the returned `deep_link` as a button/link, tell the user to tap **Start** in Telegram.
+2. Poll `GET /api/auth/telegram/status/{token}` every ~2 seconds.
+3. Once `status` flips to `"completed"`, store `access_token`/`refresh_token` exactly as you would from `/api/auth/login` — no code entry, no extra step.
 
 ---
 

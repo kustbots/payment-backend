@@ -48,3 +48,7 @@ def processed_payments_col():
 
 def oxapay_invoices_col():
     return get_db()["oxapay_invoices"]
+
+
+def telegram_login_requests_col():
+    return get_db()["telegram_login_requests"]

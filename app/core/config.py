@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     ENV: str = "development"
     ADMIN_BOOTSTRAP_EMAIL: str = ""
 
+    # Telegram login (deep-link + bot /start based auth)
+    TELEGRAM_AUTH_BOT_TOKEN: str = ""
+    TELEGRAM_AUTH_BOT_USERNAME: str = ""
+    TELEGRAM_WEBHOOK_SECRET: str = ""
+    TELEGRAM_WEBHOOK_BASE_URL: str = ""
+    TELEGRAM_LOGIN_TIMEOUT_SECONDS: int = 600
+
     @property
     def deployers(self) -> list[dict]:
         try:

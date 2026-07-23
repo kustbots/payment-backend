@@ -26,36 +26,41 @@ class TokenResponse(BaseModel):
 
 class UserOut(BaseModel):
     id: str
-    email: EmailStr
+    email: EmailStr | None = None
     points: float
     role: str
     referral_code: str
     created_at: datetime
+    telegram_username: str | None = None
 
 
 class UserInDB(BaseModel):
     id: str
-    email: EmailStr
-    hashed_password: str
+    email: EmailStr | None
+    hashed_password: str | None
     points: float
     role: str
     referral_code: str
     referrer_id: str | None
     created_at: datetime
     is_active: bool
+    telegram_user_id: int | None = None
+    telegram_username: str | None = None
 
     @classmethod
     def from_mongo(cls, doc: dict) -> "UserInDB":
         return cls(
             id=str(doc["_id"]),
-            email=doc["email"],
-            hashed_password=doc["hashed_password"],
+            email=doc.get("email"),
+            hashed_password=doc.get("hashed_password"),
             points=doc.get("points", 0.0),
             role=doc.get("role", "user"),
             referral_code=doc["referral_code"],
             referrer_id=str(doc["referrer_id"]) if doc.get("referrer_id") else None,
             created_at=doc["created_at"],
             is_active=doc.get("is_active", True),
+            telegram_user_id=doc.get("telegram_user_id"),
+            telegram_username=doc.get("telegram_username"),
         )
 
     def to_out(self) -> UserOut:
@@ -66,4 +71,5 @@ class UserInDB(BaseModel):
             role=self.role,
             referral_code=self.referral_code,
             created_at=self.created_at,
+            telegram_username=self.telegram_username,
         )
