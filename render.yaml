@@ -1,0 +1,51 @@
+services:
+  - type: web
+    name: payment-backend
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DB_NAME
+        value: payments_app
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "30"
+      - key: REFRESH_TOKEN_EXPIRE_DAYS
+        value: "14"
+      - key: OXAPAY_API_KEY
+        sync: false
+      - key: OXAPAY_API_BASE
+        value: https://api.oxapay.com
+      - key: OXAPAY_CALLBACK_URL
+        sync: false
+      - key: CLAIMER_API_URL
+        sync: false
+      - key: CLAIMER_ADMIN_TOKEN
+        sync: false
+      - key: API_CLAIMER_AUTH_URL
+        sync: false
+      - key: API_CLAIMER_DEPLOYERS
+        sync: false
+      - key: API_CLAIMER_MIRROR_SITE
+        sync: false
+      - key: API_CLAIMER_REGION
+        value: eu
+      - key: REFUND_RATE_CLAIMER_PER_HOUR
+        value: "0.0"
+      - key: REFUND_RATE_API_CLAIMER_PER_HOUR
+        value: "0.0"
+      - key: PAYMENT_TIMEOUT_SECONDS
+        value: "900"
+      - key: POLL_INTERVAL_SECONDS
+        value: "30"
+      - key: ENV
+        value: production
+      - key: ADMIN_BOOTSTRAP_EMAIL
+        sync: false

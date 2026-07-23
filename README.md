@@ -30,6 +30,20 @@ Key ones frontend/infra teams should know about:
 - `CLAIMER_API_URL`, `API_CLAIMER_AUTH_URL`, `CLAIMER_ADMIN_TOKEN`, `API_CLAIMER_DEPLOYERS` — the external product-fulfillment services this backend calls after a purchase is confirmed.
 - `ADMIN_BOOTSTRAP_EMAIL` — the one email address that is auto-promoted to `role: "admin"` on registration. After that, promote further admins by setting `role: "admin"` directly on their user document in MongoDB.
 
+## Deploying (Koyeb / Render)
+
+The app is a standard ASGI service — it just needs `MONGO_URI` pointing at a reachable MongoDB (e.g. Atlas) and the other secrets from `.env.example` set as platform env vars. A `Dockerfile` is included and works on both platforms; `Procfile` and `render.yaml` are provided for Render's native (non-Docker) Python runtime.
+
+**Render:**
+- Easiest: push this repo, then in Render choose "New > Blueprint" and point it at this repo — `render.yaml` defines the service, health check (`/health`), and the full env var list (secrets are marked `sync: false` so you fill them in in the dashboard, never in the file).
+- Manual alternative: "New > Web Service", runtime "Python 3", build command `pip install -r requirements.txt`, start command from `Procfile` (`uvicorn app.main:app --host 0.0.0.0 --port $PORT`), health check path `/health`.
+
+**Koyeb:**
+- Create a service from this repo/branch; Koyeb auto-detects the `Dockerfile` and builds/runs it (it already binds to `$PORT`, which Koyeb injects).
+- Set every variable from `.env.example` under the service's environment variables. Set the health check path to `/health`.
+
+Either platform: set `ENV=production` so the dev-only `/api/payments/dev/mark-paid/{track_id}` endpoint is not registered, and point `OXAPAY_CALLBACK_URL` at that deployment's public URL + `/api/payments/oxapay/webhook`.
+
 ## Running tests
 
 ```bash
