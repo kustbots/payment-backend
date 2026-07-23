@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+motor
+pydantic-settings
+pydantic[email]
+passlib
+bcrypt==4.0.1
+python-jose[cryptography]
+httpx
+python-multipart
+python-dotenv
+pytest
+pytest-asyncio
+mongomock-motor
