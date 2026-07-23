@@ -1,0 +1,68 @@
+name: payment-backend
+services:
+  - name: web
+    git:
+      repository: github.com/kustbots/payment-backend
+      branch: main
+    instance_types:
+      - type: nano
+    regions:
+      - was
+    scalings:
+      - min: 1
+        max: 1
+    ports:
+      - port: 8000
+        protocol: http
+    routes:
+      - path: /
+        port: 8000
+    health_checks:
+      - http:
+          path: /health
+          port: 8000
+    env:
+      - key: MONGO_URI
+        secret: MONGO_URI
+      - key: MONGO_DB_NAME
+        value: payments_app
+      - key: JWT_SECRET_KEY
+        secret: JWT_SECRET_KEY
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "30"
+      - key: REFRESH_TOKEN_EXPIRE_DAYS
+        value: "14"
+      - key: OXAPAY_API_KEY
+        secret: OXAPAY_API_KEY
+      - key: OXAPAY_API_BASE
+        value: https://api.oxapay.com
+      - key: OXAPAY_CALLBACK_URL
+        secret: OXAPAY_CALLBACK_URL
+      - key: CLAIMER_API_URL
+        secret: CLAIMER_API_URL
+      - key: CLAIMER_ADMIN_TOKEN
+        secret: CLAIMER_ADMIN_TOKEN
+      - key: API_CLAIMER_AUTH_URL
+        secret: API_CLAIMER_AUTH_URL
+      - key: API_CLAIMER_DEPLOYERS
+        secret: API_CLAIMER_DEPLOYERS
+      - key: API_CLAIMER_MIRROR_SITE
+        secret: API_CLAIMER_MIRROR_SITE
+      - key: API_CLAIMER_REGION
+        value: eu
+      - key: REFUND_RATE_CLAIMER_PER_HOUR
+        value: "0.0"
+      - key: REFUND_RATE_API_CLAIMER_PER_HOUR
+        value: "0.0"
+      - key: PAYMENT_TIMEOUT_SECONDS
+        value: "900"
+      - key: POLL_INTERVAL_SECONDS
+        value: "30"
+      - key: ENV
+        value: production
+      - key: ADMIN_BOOTSTRAP_EMAIL
+        secret: ADMIN_BOOTSTRAP_EMAIL
+      - key: PORT
+        value: "8000"
