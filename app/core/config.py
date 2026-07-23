@@ -56,12 +56,20 @@ class Settings(BaseSettings):
     TELEGRAM_WEBHOOK_BASE_URL: str = ""
     TELEGRAM_LOGIN_TIMEOUT_SECONDS: int = 600
 
+    # CORS (comma-separated list of allowed origins, e.g. frontend domains)
+    CORS_ALLOWED_ORIGINS: str = "*"
+
     @property
     def deployers(self) -> list[dict]:
         try:
             return json.loads(self.API_CLAIMER_DEPLOYERS)
         except (json.JSONDecodeError, TypeError):
             return []
+
+    @property
+    def cors_allowed_origins(self) -> list[str]:
+        origins = [o.strip() for o in self.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
+        return origins or ["*"]
 
     @property
     def is_production(self) -> bool:

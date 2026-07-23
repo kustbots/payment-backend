@@ -3,8 +3,10 @@ import contextlib
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.logging import logger
 from app.db.indexes import create_indexes
@@ -26,6 +28,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Payment Backend API", version="1.0.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_settings().cors_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(AppError)
