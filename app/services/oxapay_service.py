@@ -17,7 +17,7 @@ from app.core.timeutils import utcnow
 
 from app.constants import BULK_POINTS_PACKAGES, PLANS
 from app.core.config import get_settings
-from app.core.errors import NotFoundError
+from app.core.errors import NotFoundError, UpstreamServiceError
 from app.core.logging import logger
 from app.db.mongo import oxapay_invoices_col, processed_payments_col, subscriptions_col, transactions_col
 from app.services.referral_service import credit_referral_reward
@@ -52,6 +52,38 @@ async def query_invoice(track_id: str) -> dict:
         return r.json()
 
 
+def extract_invoice_fields(resp: dict) -> tuple[str, str | None]:
+    """Pull (track_id, pay_url) out of OxaPay's create-invoice response.
+
+    OxaPay's real v1 API nests the payload under "data" using snake_case keys
+    (track_id, payment_url) -- not the top-level camelCase (trackId, payLink)
+    this used to assume, which silently produced the literal string "None"
+    for every invoice and crashed the second+ purchase attempt with a
+    duplicate-key error on oxapay_invoices.track_id.
+    """
+    data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+
+    track_id = (
+        resp.get("track_id")
+        or resp.get("trackId")
+        or data.get("track_id")
+        or data.get("trackId")
+    )
+    if not track_id:
+        logger.error(f"[OXAPAY] create_invoice response missing track_id: {resp}")
+        raise UpstreamServiceError("OxaPay did not return a valid invoice ID -- please try again")
+
+    pay_url = (
+        resp.get("payment_url")
+        or resp.get("payLink")
+        or resp.get("pay_link")
+        or data.get("payment_url")
+        or data.get("payLink")
+        or data.get("pay_link")
+    )
+    return str(track_id), pay_url
+
+
 def extract_invoice_status(resp_json: dict) -> str | None:
     if not resp_json:
         return None
@@ -84,8 +116,7 @@ async def start_plan_purchase_invoice(
     claimer_settings = subscription_service.validate_claimer_settings(claimer_settings)
 
     resp = await create_invoice(plan["amount"])
-    track_id = str(resp.get("trackId") or resp.get("track_id") or resp.get("data", {}).get("trackId"))
-    pay_url = resp.get("payLink") or resp.get("pay_link") or resp.get("data", {}).get("payLink")
+    track_id, pay_url = extract_invoice_fields(resp)
 
     now = utcnow()
     invoice_doc = {
@@ -116,8 +147,7 @@ async def start_points_bundle_invoice(user_id: ObjectId, package_key: str) -> di
         raise NotFoundError(f"Unknown points package '{package_key}'")
 
     resp = await create_invoice(package["amount"])
-    track_id = str(resp.get("trackId") or resp.get("track_id") or resp.get("data", {}).get("trackId"))
-    pay_url = resp.get("payLink") or resp.get("pay_link") or resp.get("data", {}).get("payLink")
+    track_id, pay_url = extract_invoice_fields(resp)
 
     now = utcnow()
     invoice_doc = {

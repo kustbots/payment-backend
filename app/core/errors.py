@@ -41,3 +41,7 @@ class ValidationAppError(AppError):
 
 class AuthError(AppError):
     status_code = 401
+
+
+class UpstreamServiceError(AppError):
+    status_code = 502
