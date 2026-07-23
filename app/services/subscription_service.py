@@ -20,7 +20,7 @@ from bson import ObjectId
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from app.constants import PLANS
+from app.constants import API_CLAIMER_CURRENCY_OPTIONS, API_CLAIMER_DROP_OPTIONS, PLANS
 from app.core.config import get_settings
 from app.core.errors import ConflictError, NotFoundError, ValidationAppError
 from app.db.mongo import subscriptions_col, transactions_col
@@ -33,6 +33,25 @@ def _plan_or_404(plan_key: str) -> dict:
     if not plan:
         raise NotFoundError(f"Unknown plan '{plan_key}'")
     return plan
+
+
+def validate_claimer_settings(settings_in: dict | None) -> dict | None:
+    """Validate a claimer_settings payload (currency/vault/process_all/drops)
+    against the known option lists. Returns the payload unchanged if valid."""
+    if not settings_in:
+        return None
+
+    currency = settings_in.get("currency")
+    if currency is not None and currency not in API_CLAIMER_CURRENCY_OPTIONS:
+        raise ValidationAppError(f"Invalid currency '{currency}'. Must be one of {API_CLAIMER_CURRENCY_OPTIONS}")
+
+    drops = settings_in.get("drops")
+    if drops is not None:
+        invalid = [d for d in drops if d not in API_CLAIMER_DROP_OPTIONS]
+        if invalid:
+            raise ValidationAppError(f"Invalid drop(s) {invalid}. Must be a subset of {API_CLAIMER_DROP_OPTIONS}")
+
+    return settings_in
 
 
 async def fulfill_external_activation(sub_doc: dict) -> dict:
@@ -52,7 +71,12 @@ async def fulfill_external_activation(sub_doc: dict) -> dict:
         if deployer:
             app_name = deployer_service.generate_unique_app_name(sub_doc["stake_username"])
             ok, res = await deployer_service.deploy_container(
-                sub_doc["session_token"], app_name, deployer["url"], deployer["token"], settings.API_CLAIMER_MIRROR_SITE
+                sub_doc["session_token"],
+                app_name,
+                deployer["url"],
+                deployer["token"],
+                settings.API_CLAIMER_MIRROR_SITE,
+                claimer_settings=sub_doc.get("claimer_settings"),
             )
             updates.update(
                 {
@@ -75,8 +99,10 @@ async def purchase_with_points(
     stake_username: str,
     session_token: str | None,
     idempotency_key: str,
+    claimer_settings: dict | None = None,
 ) -> dict:
     plan = _plan_or_404(plan_key)
+    claimer_settings = validate_claimer_settings(claimer_settings)
     amount = float(plan["amount"])
     now = utcnow()
 
@@ -132,6 +158,7 @@ async def purchase_with_points(
         "deploy_url": None,
         "deploy_status": None,
         "activation_failed": False,
+        "claimer_settings": claimer_settings,
         "created_at": now,
         "updated_at": now,
     }
@@ -234,6 +261,39 @@ async def extend_subscription(subscription_id: ObjectId, hours: int) -> dict:
     api_url = settings.API_CLAIMER_AUTH_URL if sub["product_type"] == "api_claimer" else settings.CLAIMER_API_URL
     await claimer_service.activate(sub["stake_username"], hours, api_url)
 
+    return updated
+
+
+async def update_claimer_settings(user_id: ObjectId, subscription_id: ObjectId, settings_in: dict) -> dict:
+    """Apply currency/vault/process_all/drops settings to an already-deployed
+    api_claimer container (PATCH on the deployer host), then persist the new
+    settings on the subscription record only if the remote apply succeeded."""
+    settings_in = validate_claimer_settings(settings_in) or {}
+
+    sub = await subscriptions_col().find_one({"_id": subscription_id, "user_id": user_id})
+    if not sub:
+        raise NotFoundError("Subscription not found")
+    if sub["product_type"] != "api_claimer":
+        raise ValidationAppError("Settings management is only available for the api_claimer product")
+    if sub["status"] != "active" or not sub.get("app_name") or not sub.get("deploy_url"):
+        raise ConflictError("Subscription has no active deployed container to configure")
+
+    auth_token = deployer_service.get_deployer_auth_token(sub["deploy_url"])
+    if not auth_token:
+        raise ConflictError("Could not resolve the deployer for this container")
+
+    ok, res = await deployer_service.apply_container_settings(
+        sub["deploy_url"], auth_token, sub["app_name"], settings_in
+    )
+    if not ok:
+        raise ConflictError(f"Failed to apply settings: {res.get('error', 'unknown error')}")
+
+    merged = {**(sub.get("claimer_settings") or {}), **{k: v for k, v in settings_in.items() if v is not None}}
+    updated = await subscriptions_col().find_one_and_update(
+        {"_id": subscription_id},
+        {"$set": {"claimer_settings": merged, "updated_at": utcnow()}},
+        return_document=ReturnDocument.AFTER,
+    )
     return updated
 
 

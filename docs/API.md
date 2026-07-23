@@ -136,6 +136,15 @@ Paginated (most recent 200) ledger of everything that has touched the user's poi
 ]
 ```
 
+### `GET /api/subscriptions/claimer-settings/options` — public
+Valid values for the `api_claimer` product's optional `claimer_settings` (see below):
+```json
+{
+  "currency_options": ["usdt", "btc", "eth", "ltc", "trx", "doge"],
+  "drop_options": ["Daily1", "Daily2", "Daily3", "DailyOther", "HighRollers", "PlaySmarter", "WeeklyStream", "OtherDrops"]
+}
+```
+
 ### `POST /api/subscriptions/purchase/points` — auth required
 Buys a plan using the user's points balance instead of crypto. **Requires an `Idempotency-Key` header** — see [Idempotency](#idempotency--double-spend-protection-read-this) below; generate a fresh random UUID per purchase *attempt* on the client (not per plan — a retried attempt after a network error must reuse the same key).
 
@@ -147,12 +156,14 @@ Request:
   "product_type": "code_claimer",
   "plan_key": "2d",
   "stake_username": "someusername",
-  "session_token": null
+  "session_token": null,
+  "claimer_settings": null
 }
 ```
 - `product_type`: `"code_claimer"` or `"api_claimer"`.
 - `stake_username`: 3–51 chars, `[A-Za-z0-9_@]` only.
 - `session_token`: required (≥ some length set by the external claimer service) only for `api_claimer` if you want a container deployed as part of this purchase; omit/`null` otherwise.
+- `claimer_settings` (optional, `api_claimer` only): `{"currency": "usdt", "vault": true, "process_all": false, "drops": ["Daily1", "HighRollers"]}`. Any field can be omitted/`null` to use the deployer's default. `currency` must be one of, and `drops` must be a subset of, the values from `GET /api/subscriptions/claimer-settings/options` — invalid values return `422`.
 
 Response `200` — the created subscription:
 ```json
@@ -160,7 +171,8 @@ Response `200` — the created subscription:
   "id": "665f...", "product_type": "code_claimer", "plan_key": "2d", "status": "active",
   "stake_username": "someusername", "hours": 48, "amount_usd": 6.0,
   "started_at": "...", "expires_at": "...", "cancelled_at": null, "refund_amount": null,
-  "app_name": null, "deploy_url": null, "deploy_status": null, "activation_failed": false
+  "app_name": null, "deploy_url": null, "deploy_status": null, "activation_failed": false,
+  "claimer_settings": null
 }
 ```
 `activation_failed: true` means the points were spent and the subscription record was created, but the call to the external activation service failed — surface this to the user as "activated, contact support if issues persist" rather than a hard error, and flag it for backend/admin follow-up (see `POST /api/admin/subscriptions/{id}/extend` for remediation options).
@@ -168,13 +180,18 @@ Response `200` — the created subscription:
 Errors: `402` insufficient points, `404` unknown plan, `409` a purchase with this idempotency key is already mid-flight or already failed (message tells you which).
 
 ### `POST /api/subscriptions/purchase/crypto` — auth required
-Same request body as above, minus `Idempotency-Key` (not needed — crypto purchases are deduplicated server-side by OxaPay `track_id` instead). Returns an invoice (same shape as the wallet bundle purchase response, `purpose: "plan_purchase"`). The subscription is created automatically once OxaPay confirms payment.
+Same request body as above (including optional `claimer_settings`), minus `Idempotency-Key` (not needed — crypto purchases are deduplicated server-side by OxaPay `track_id` instead). Returns an invoice (same shape as the wallet bundle purchase response, `purpose: "plan_purchase"`). The subscription is created automatically once OxaPay confirms payment.
 
 ### `GET /api/subscriptions/me` — auth required
 Returns an array of the caller's own subscriptions (all statuses), newest first.
 
 ### `POST /api/subscriptions/{id}/cancel` — auth required, must own the subscription
 Cancels an active subscription and credits any refund (refund amount is `remaining_hours * refund_rate`; refund rates are currently configured to `0.0` by default — check with backend for current values). Returns the updated subscription (`status: "cancelled"`). Calling this twice on the same subscription returns `409` the second time — no double refund.
+
+### `PATCH /api/subscriptions/{id}/settings` — auth required, must own the subscription
+Updates currency/vault/process_all/drops on an **already-deployed** `api_claimer` container (pushes the change to the running container via the deployer, then persists it). Request body is the same optional `claimer_settings` shape shown above (send only the fields you want to change — omitted/`null` fields are left as-is). Returns the updated subscription.
+
+Only works when the subscription is `status: "active"`, is `product_type: "api_claimer"`, and already has a deployed container — otherwise `409`. `404` if the subscription doesn't exist or isn't owned by the caller. `422` for invalid currency/drop values.
 
 ---
 

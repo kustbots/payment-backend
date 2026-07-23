@@ -3,11 +3,22 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
+class ClaimerSettingsIn(BaseModel):
+    """Deploy-time / manageable container settings for the api_claimer product.
+    All fields optional -- None means "use the deployer's default"."""
+
+    currency: str | None = None
+    vault: bool | None = None
+    process_all: bool | None = None
+    drops: list[str] | None = None
+
+
 class PurchaseWithPointsRequest(BaseModel):
     product_type: str = Field(pattern="^(code_claimer|api_claimer)$")
     plan_key: str = Field(pattern="^(2d|7d|30d|120d)$")
     stake_username: str = Field(min_length=3, max_length=51, pattern=r"^[A-Za-z0-9_@]{3,51}$")
     session_token: str | None = None
+    claimer_settings: ClaimerSettingsIn | None = None
 
 
 class PurchaseWithCryptoRequest(BaseModel):
@@ -15,6 +26,7 @@ class PurchaseWithCryptoRequest(BaseModel):
     plan_key: str = Field(pattern="^(2d|7d|30d|120d)$")
     stake_username: str = Field(min_length=3, max_length=51, pattern=r"^[A-Za-z0-9_@]{3,51}$")
     session_token: str | None = None
+    claimer_settings: ClaimerSettingsIn | None = None
 
 
 class SubscriptionOut(BaseModel):
@@ -33,6 +45,7 @@ class SubscriptionOut(BaseModel):
     deploy_url: str | None = None
     deploy_status: str | None = None
     activation_failed: bool = False
+    claimer_settings: dict | None = None
 
     @classmethod
     def from_mongo(cls, doc: dict) -> "SubscriptionOut":
@@ -52,6 +65,7 @@ class SubscriptionOut(BaseModel):
             deploy_url=doc.get("deploy_url"),
             deploy_status=doc.get("deploy_status"),
             activation_failed=doc.get("activation_failed", False),
+            claimer_settings=doc.get("claimer_settings"),
         )
 
 
@@ -60,3 +74,8 @@ class PlanOut(BaseModel):
     label: str
     amount: float
     hours: int
+
+
+class ClaimerSettingsOptionsOut(BaseModel):
+    currency_options: list[str]
+    drop_options: list[str]

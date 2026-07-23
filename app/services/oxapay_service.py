@@ -21,6 +21,7 @@ from app.core.errors import NotFoundError
 from app.core.logging import logger
 from app.db.mongo import oxapay_invoices_col, processed_payments_col, subscriptions_col, transactions_col
 from app.services.referral_service import credit_referral_reward
+from app.services import subscription_service
 from app.services.subscription_service import fulfill_external_activation
 from app.services.wallet_service import credit_points_atomic
 
@@ -70,11 +71,17 @@ def extract_invoice_status(resp_json: dict) -> str | None:
 
 
 async def start_plan_purchase_invoice(
-    user_id: ObjectId, product_type: str, plan_key: str, stake_username: str, session_token: str | None
+    user_id: ObjectId,
+    product_type: str,
+    plan_key: str,
+    stake_username: str,
+    session_token: str | None,
+    claimer_settings: dict | None = None,
 ) -> dict:
     plan = PLANS.get(plan_key)
     if not plan:
         raise NotFoundError(f"Unknown plan '{plan_key}'")
+    claimer_settings = subscription_service.validate_claimer_settings(claimer_settings)
 
     resp = await create_invoice(plan["amount"])
     track_id = str(resp.get("trackId") or resp.get("track_id") or resp.get("data", {}).get("trackId"))
@@ -91,6 +98,7 @@ async def start_plan_purchase_invoice(
             "stake_username": stake_username,
             "session_token": session_token,
             "hours": plan["hours"],
+            "claimer_settings": claimer_settings,
         },
         "amount_usd": plan["amount"],
         "pay_url": pay_url,
@@ -190,6 +198,7 @@ async def credit_oxapay_payment(track_id: str) -> None:
             "deploy_url": None,
             "deploy_status": None,
             "activation_failed": False,
+            "claimer_settings": ref.get("claimer_settings"),
             "created_at": now,
             "updated_at": now,
         }

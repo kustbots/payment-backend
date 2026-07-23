@@ -16,3 +16,25 @@ BULK_POINTS_PACKAGES = {
 PRODUCT_TYPES = ("code_claimer", "api_claimer")
 
 REFERRAL_REWARD_RATE = 0.10
+
+# API Claimer deploy-time / manageable container settings (ported from the
+# bot's currency/vault/process_all/drops configuration feature).
+API_CLAIMER_CURRENCY_OPTIONS = ("usdt", "btc", "eth", "ltc", "trx", "doge")
+
+API_CLAIMER_DROP_OPTIONS = (
+    "Daily1",
+    "Daily2",
+    "Daily3",
+    "DailyOther",
+    "HighRollers",
+    "PlaySmarter",
+    "WeeklyStream",
+    "OtherDrops",
+)
+
+API_CLAIMER_DEFAULT_SETTINGS = {
+    "currency": None,
+    "vault": None,
+    "process_all": None,
+    "drops": None,
+}

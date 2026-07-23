@@ -33,9 +33,19 @@ def generate_unique_app_name(username: str) -> str:
 
 
 async def deploy_container(
-    session_token: str, app_name: str, deploy_url: str, auth_token: str, mirror_site: str
+    session_token: str,
+    app_name: str,
+    deploy_url: str,
+    auth_token: str,
+    mirror_site: str,
+    claimer_settings: dict | None = None,
 ) -> tuple[bool, dict]:
-    """Deploy a container via the given deployer, parsing its SSE progress stream."""
+    """Deploy a container via the given deployer, parsing its SSE progress stream.
+
+    claimer_settings (currency/vault/process_all/drops) are forwarded into the
+    deploy payload only where set -- None values are omitted so the deployer
+    falls back to its own defaults, matching the legacy bot's behavior.
+    """
     url = f"{deploy_url}/deploy"
     headers = {
         "Authorization": f"Bearer {auth_token}",
@@ -43,6 +53,11 @@ async def deploy_container(
         "Accept": "text/event-stream",
     }
     payload = {"session_token": session_token, "app_name": app_name, "MIRROR_SITE": mirror_site}
+    if claimer_settings:
+        for key in ("currency", "vault", "process_all", "drops"):
+            value = claimer_settings.get(key)
+            if value is not None:
+                payload[key] = value
 
     try:
         async with httpx.AsyncClient(timeout=7200) as client:
@@ -72,6 +87,36 @@ async def deploy_container(
                 return False, {"error": "Stream ended without completion status", "last_status": last_status}
     except Exception as e:
         logger.exception(f"[DEPLOY] Failed to deploy container {app_name}: {e}")
+        return False, {"error": str(e)}
+
+
+def get_deployer_auth_token(deploy_url: str) -> str | None:
+    settings = get_settings()
+    for deployer in settings.deployers:
+        if deployer["url"] == deploy_url:
+            return deployer["token"]
+    return None
+
+
+async def apply_container_settings(
+    deploy_url: str, auth_token: str, app_name: str, settings_payload: dict
+) -> tuple[bool, dict]:
+    """PATCH settings (currency/vault/process_all/drops) on an already-deployed
+    container. Only non-None keys in settings_payload are sent."""
+    url = f"{deploy_url}/apps/{app_name}/settings"
+    headers = {"Authorization": f"Bearer {auth_token}", "Content-Type": "application/json"}
+    body = {k: v for k, v in settings_payload.items() if v is not None}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.patch(url, headers=headers, json=body)
+        if r.status_code >= 400:
+            return False, {"error": f"HTTP {r.status_code}: {r.text}"}
+        try:
+            return True, r.json()
+        except Exception:
+            return True, {"status": "ok"}
+    except Exception as e:
+        logger.exception(f"[SETTINGS] Failed to apply settings for {app_name}: {e}")
         return False, {"error": str(e)}
 
 
