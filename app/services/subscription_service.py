@@ -13,6 +13,7 @@ $gte-guarded find_one_and_update in wallet_service, so even API misuse that
 skips the idempotency key still cannot cause a negative-balance double-spend.
 """
 
+import asyncio
 from datetime import timedelta
 from app.core.timeutils import utcnow
 
@@ -23,9 +24,35 @@ from pymongo.errors import DuplicateKeyError
 from app.constants import API_CLAIMER_CURRENCY_OPTIONS, API_CLAIMER_DROP_OPTIONS, PLANS
 from app.core.config import get_settings
 from app.core.errors import ConflictError, NotFoundError, ValidationAppError
+from app.core.logging import logger
 from app.db.mongo import subscriptions_col, transactions_col
 from app.services import claimer_service, deployer_service
 from app.services.wallet_service import credit_points_atomic, deduct_points_atomic
+
+# Rough progress estimate for known SSE stage names, used only when the
+# deployer's payload doesn't include its own numeric progress/percent field.
+_STAGE_PROGRESS = {
+    "queued": 10,
+    "pending": 10,
+    "cloning": 20,
+    "build": 40,
+    "building": 40,
+    "installing": 55,
+    "install": 55,
+    "configuring": 70,
+    "deploying": 60,
+    "starting": 85,
+    "completed": 100,
+}
+
+
+def _estimate_deploy_progress(data: dict) -> int:
+    for key in ("progress", "percent", "percentage"):
+        value = data.get(key)
+        if isinstance(value, (int, float)):
+            return max(0, min(100, int(value)))
+    status = str(data.get("status", "")).lower()
+    return _STAGE_PROGRESS.get(status, 50)
 
 
 def _plan_or_404(plan_key: str) -> dict:
@@ -33,6 +60,14 @@ def _plan_or_404(plan_key: str) -> dict:
     if not plan:
         raise NotFoundError(f"Unknown plan '{plan_key}'")
     return plan
+
+
+def require_session_token_for_api_claimer(product_type: str, session_token: str | None) -> None:
+    """The API Claimer product is meaningless without a session token to
+    deploy with -- without this check a purchase would silently activate
+    with no container at all, which isn't what the user paid for."""
+    if product_type == "api_claimer" and not session_token:
+        raise ValidationAppError("session_token is required when product_type is 'api_claimer'")
 
 
 def validate_claimer_settings(settings_in: dict | None) -> dict | None:
@@ -54,11 +89,80 @@ def validate_claimer_settings(settings_in: dict | None) -> dict | None:
     return settings_in
 
 
+async def _run_deploy_and_persist(
+    subscription_id: ObjectId,
+    session_token: str,
+    stake_username: str,
+    mirror_site: str,
+    claimer_settings: dict | None,
+) -> None:
+    """Runs the (potentially long) container deploy in the background and
+    persists live progress to the subscription doc as the deployer's SSE
+    stream reports it, so the frontend can poll and show a progress bar
+    instead of the purchase request blocking until deploy finishes."""
+    deployer = await deployer_service.get_available_deployer()
+    if not deployer:
+        await subscriptions_col().update_one(
+            {"_id": subscription_id},
+            {"$set": {"deploy_status": "no_capacity", "deploy_progress": 0, "deploy_message": "No deployer capacity available"}},
+        )
+        return
+
+    app_name = deployer_service.generate_unique_app_name(stake_username)
+    await subscriptions_col().update_one(
+        {"_id": subscription_id},
+        {"$set": {"app_name": app_name, "deploy_status": "deploying", "deploy_progress": 5, "deploy_message": "Starting deployment..."}},
+    )
+
+    async def on_update(data: dict) -> None:
+        message = str(data.get("message") or data.get("status") or "")[:200]
+        progress = _estimate_deploy_progress(data)
+        try:
+            await subscriptions_col().update_one(
+                {"_id": subscription_id},
+                {"$set": {"deploy_progress": progress, "deploy_message": message}},
+            )
+        except Exception:
+            logger.exception(f"[DEPLOY] Failed to persist progress for subscription {subscription_id}")
+
+    try:
+        ok, res = await deployer_service.deploy_container(
+            session_token,
+            app_name,
+            deployer["url"],
+            deployer["token"],
+            mirror_site,
+            claimer_settings=claimer_settings,
+            on_update=on_update,
+        )
+    except Exception as e:
+        logger.exception(f"[DEPLOY] Background deploy crashed for subscription {subscription_id}: {e}")
+        ok, res = False, {"error": str(e)}
+
+    await subscriptions_col().update_one(
+        {"_id": subscription_id},
+        {
+            "$set": {
+                "deploy_url": deployer["url"] if ok else None,
+                "deploy_status": "deployed" if ok else "failed",
+                "deploy_progress": 100 if ok else 0,
+                "deploy_message": "Deployed successfully" if ok else str(res.get("error", "Deployment failed"))[:200],
+            }
+        },
+    )
+
+
 async def fulfill_external_activation(sub_doc: dict) -> dict:
-    """Call the external claimer activation (+ deploy for api_claimer) after
-    the points/crypto payment has already been committed. Failures here do
-    NOT roll back the payment -- they flag the subscription for remediation,
-    since the payment was legitimately taken for a purchase attempt."""
+    """Call the external claimer activation (+ kick off a background deploy
+    for api_claimer) after the points/crypto payment has already been
+    committed. Failures here do NOT roll back the payment -- they flag the
+    subscription for remediation, since the payment was legitimately taken
+    for a purchase attempt.
+
+    The deploy itself runs as a background task rather than being awaited
+    here -- it can take a long time, and the caller (a live purchase
+    request) shouldn't block on it. The frontend polls the subscription's
+    deploy_progress/deploy_message fields instead."""
     settings = get_settings()
     api_url = settings.API_CLAIMER_AUTH_URL if sub_doc["product_type"] == "api_claimer" else settings.CLAIMER_API_URL
 
@@ -67,26 +171,18 @@ async def fulfill_external_activation(sub_doc: dict) -> dict:
     updates: dict = {"activation_failed": not activation_ok}
 
     if activation_ok and sub_doc["product_type"] == "api_claimer" and sub_doc.get("session_token"):
-        deployer = await deployer_service.get_available_deployer()
-        if deployer:
-            app_name = deployer_service.generate_unique_app_name(sub_doc["stake_username"])
-            ok, res = await deployer_service.deploy_container(
+        updates["deploy_status"] = "deploying"
+        updates["deploy_progress"] = 0
+        updates["deploy_message"] = "Queued for deployment..."
+        asyncio.create_task(
+            _run_deploy_and_persist(
+                sub_doc["_id"],
                 sub_doc["session_token"],
-                app_name,
-                deployer["url"],
-                deployer["token"],
+                sub_doc["stake_username"],
                 settings.API_CLAIMER_MIRROR_SITE,
-                claimer_settings=sub_doc.get("claimer_settings"),
+                sub_doc.get("claimer_settings"),
             )
-            updates.update(
-                {
-                    "app_name": app_name,
-                    "deploy_url": deployer["url"] if ok else None,
-                    "deploy_status": "deployed" if ok else "failed",
-                }
-            )
-        else:
-            updates["deploy_status"] = "no_capacity"
+        )
 
     await subscriptions_col().update_one({"_id": sub_doc["_id"]}, {"$set": updates})
     return {**sub_doc, **updates}
@@ -102,6 +198,7 @@ async def purchase_with_points(
     claimer_settings: dict | None = None,
 ) -> dict:
     plan = _plan_or_404(plan_key)
+    require_session_token_for_api_claimer(product_type, session_token)
     claimer_settings = validate_claimer_settings(claimer_settings)
     amount = float(plan["amount"])
     now = utcnow()
@@ -157,6 +254,8 @@ async def purchase_with_points(
         "app_name": None,
         "deploy_url": None,
         "deploy_status": None,
+        "deploy_progress": None,
+        "deploy_message": None,
         "activation_failed": False,
         "claimer_settings": claimer_settings,
         "created_at": now,

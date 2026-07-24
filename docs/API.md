@@ -201,7 +201,7 @@ Request:
 ```
 - `product_type`: `"code_claimer"` or `"api_claimer"`.
 - `stake_username`: 3–51 chars, `[A-Za-z0-9_@]` only.
-- `session_token`: required (≥ some length set by the external claimer service) only for `api_claimer` if you want a container deployed as part of this purchase; omit/`null` otherwise.
+- `session_token`: **required when `product_type` is `"api_claimer"`** (the API Claimer product is a deployed container — there's nothing to deploy without it); omit/`null` for `code_claimer`. Missing it for `api_claimer` returns `422`.
 - `claimer_settings` (optional, `api_claimer` only): `{"currency": "usdt", "vault": true, "process_all": false, "drops": ["Daily1", "HighRollers"]}`. Any field can be omitted/`null` to use the deployer's default. `currency` must be one of, and `drops` must be a subset of, the values from `GET /api/subscriptions/claimer-settings/options` — invalid values return `422`.
 
 Response `200` — the created subscription:
@@ -210,19 +210,22 @@ Response `200` — the created subscription:
   "id": "665f...", "product_type": "code_claimer", "plan_key": "2d", "status": "active",
   "stake_username": "someusername", "hours": 48, "amount_usd": 6.0,
   "started_at": "...", "expires_at": "...", "cancelled_at": null, "refund_amount": null,
-  "app_name": null, "deploy_url": null, "deploy_status": null, "activation_failed": false,
+  "app_name": null, "deploy_url": null, "deploy_status": null,
+  "deploy_progress": null, "deploy_message": null, "activation_failed": false,
   "claimer_settings": null
 }
 ```
 `activation_failed: true` means the points were spent and the subscription record was created, but the call to the external activation service failed — surface this to the user as "activated, contact support if issues persist" rather than a hard error, and flag it for backend/admin follow-up (see `POST /api/admin/subscriptions/{id}/extend` for remediation options).
 
-Errors: `402` insufficient points, `404` unknown plan, `409` a purchase with this idempotency key is already mid-flight or already failed (message tells you which).
+**For `api_claimer`, the container deploy happens in the background** — this endpoint returns as soon as the purchase and points deduction are committed, with `deploy_status: "deploying"` and `deploy_progress: 0`. Poll `GET /api/subscriptions/me` (every ~2s is reasonable) and watch the same subscription's `deploy_progress` (0–100) and `deploy_message` (a short human-readable status string) until `deploy_status` becomes `"deployed"` (success, `deploy_progress: 100`), `"failed"`, or `"no_capacity"` (no deployer had room — contact support). `deploy_progress`/`deploy_message` are `null` for `code_claimer` (no deploy involved) and while `deploy_status` is still `null`/pending activation.
+
+Errors: `402` insufficient points, `404` unknown plan, `409` a purchase with this idempotency key is already mid-flight or already failed (message tells you which), `422` missing `session_token` for `api_claimer` or invalid `claimer_settings`.
 
 ### `POST /api/subscriptions/purchase/crypto` — auth required
-Same request body as above (including optional `claimer_settings`), minus `Idempotency-Key` (not needed — crypto purchases are deduplicated server-side by OxaPay `track_id` instead). Returns an invoice (same shape as the wallet bundle purchase response, `purpose: "plan_purchase"`). The subscription is created automatically once OxaPay confirms payment.
+Same request body as above (including required `session_token` for `api_claimer`, and optional `claimer_settings`), minus `Idempotency-Key` (not needed — crypto purchases are deduplicated server-side by OxaPay `track_id` instead). Returns an invoice (same shape as the wallet bundle purchase response, `purpose: "plan_purchase"`). The subscription is created automatically once OxaPay confirms payment, and for `api_claimer` the same background deploy + progress-polling behavior described above applies from that point on.
 
 ### `GET /api/subscriptions/me` — auth required
-Returns an array of the caller's own subscriptions (all statuses), newest first.
+Returns an array of the caller's own subscriptions (all statuses), newest first. This is the endpoint to poll for live `deploy_progress`/`deploy_message` updates on an `api_claimer` purchase.
 
 ### `POST /api/subscriptions/{id}/cancel` — auth required, must own the subscription
 Cancels an active subscription and credits any refund (refund amount is `remaining_hours * refund_rate`; refund rates are currently configured to `0.0` by default — check with backend for current values). Returns the updated subscription (`status: "cancelled"`). Calling this twice on the same subscription returns `409` the second time — no double refund.

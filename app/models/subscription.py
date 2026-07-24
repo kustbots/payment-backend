@@ -44,6 +44,8 @@ class SubscriptionOut(BaseModel):
     app_name: str | None = None
     deploy_url: str | None = None
     deploy_status: str | None = None
+    deploy_progress: int | None = None
+    deploy_message: str | None = None
     activation_failed: bool = False
     claimer_settings: dict | None = None
 
@@ -64,6 +66,8 @@ class SubscriptionOut(BaseModel):
             app_name=doc.get("app_name"),
             deploy_url=doc.get("deploy_url"),
             deploy_status=doc.get("deploy_status"),
+            deploy_progress=doc.get("deploy_progress"),
+            deploy_message=doc.get("deploy_message"),
             activation_failed=doc.get("activation_failed", False),
             claimer_settings=doc.get("claimer_settings"),
         )

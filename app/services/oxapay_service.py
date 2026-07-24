@@ -113,6 +113,7 @@ async def start_plan_purchase_invoice(
     plan = PLANS.get(plan_key)
     if not plan:
         raise NotFoundError(f"Unknown plan '{plan_key}'")
+    subscription_service.require_session_token_for_api_claimer(product_type, session_token)
     claimer_settings = subscription_service.validate_claimer_settings(claimer_settings)
 
     resp = await create_invoice(plan["amount"])
@@ -227,6 +228,8 @@ async def credit_oxapay_payment(track_id: str) -> None:
             "app_name": None,
             "deploy_url": None,
             "deploy_status": None,
+            "deploy_progress": None,
+            "deploy_message": None,
             "activation_failed": False,
             "claimer_settings": ref.get("claimer_settings"),
             "created_at": now,

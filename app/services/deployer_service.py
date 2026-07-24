@@ -1,6 +1,7 @@
 import json
 import random
 import string
+from typing import Awaitable, Callable
 
 import httpx
 
@@ -39,12 +40,16 @@ async def deploy_container(
     auth_token: str,
     mirror_site: str,
     claimer_settings: dict | None = None,
+    on_update: Callable[[dict], Awaitable[None]] | None = None,
 ) -> tuple[bool, dict]:
     """Deploy a container via the given deployer, parsing its SSE progress stream.
 
     claimer_settings (currency/vault/process_all/drops) are forwarded into the
     deploy payload only where set -- None values are omitted so the deployer
     falls back to its own defaults, matching the legacy bot's behavior.
+
+    on_update, if given, is awaited with each raw SSE data line as it arrives
+    (e.g. so a caller can persist live deploy progress for polling clients).
     """
     url = f"{deploy_url}/deploy"
     headers = {
@@ -76,6 +81,8 @@ async def deploy_container(
                     except json.JSONDecodeError:
                         continue
                     last_status = data
+                    if on_update:
+                        await on_update(data)
                     status = data.get("status", "")
                     if status == "completed":
                         return True, data
