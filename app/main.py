@@ -38,6 +38,21 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def catch_unhandled_exceptions(request: Request, call_next):
+    # A handler registered via @app.exception_handler(Exception) is wired into
+    # Starlette's ServerErrorMiddleware, which sits OUTSIDE CORSMiddleware --
+    # its response would never get CORS headers, so the browser blocks it
+    # entirely (looks like a network failure, not a readable error). A plain
+    # HTTP middleware runs INSIDE CORSMiddleware instead, so catching here
+    # means CORS headers still get applied to the resulting error response.
+    try:
+        return await call_next(request)
+    except Exception as exc:
+        logger.exception(f"Unhandled exception on {request.method} {request.url.path}: {exc}")
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
 @app.exception_handler(AppError)
 async def app_error_handler(request: Request, exc: AppError):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})

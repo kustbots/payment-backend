@@ -6,11 +6,12 @@ PLANS = {
 }
 
 BULK_POINTS_PACKAGES = {
-    "5": {"label": "5 Points", "amount": 5.0, "points": 5},
-    "10": {"label": "10 Points", "amount": 9.5, "points": 10},
-    "25": {"label": "25 Points", "amount": 22.5, "points": 25},
-    "50": {"label": "50 Points", "amount": 42.5, "points": 50},
-    "100": {"label": "100 Points", "amount": 80.0, "points": 100},
+    "6": {"label": "6 Points", "amount": 6.0, "points": 6},
+    "12": {"label": "12 Points", "amount": 11.8, "points": 12},
+    "18": {"label": "18 Points", "amount": 17.5, "points": 18},
+    "24": {"label": "24 Points", "amount": 23.0, "points": 24},
+    "30": {"label": "30 Points", "amount": 28.0, "points": 30},
+    "36": {"label": "36 Points", "amount": 32.4, "points": 36},
 }
 
 PRODUCT_TYPES = ("code_claimer", "api_claimer")
