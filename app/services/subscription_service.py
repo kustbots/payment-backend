@@ -99,20 +99,17 @@ async def _run_deploy_and_persist(
     """Runs the (potentially long) container deploy in the background and
     persists live progress to the subscription doc as the deployer's SSE
     stream reports it, so the frontend can poll and show a progress bar
-    instead of the purchase request blocking until deploy finishes."""
-    deployer = await deployer_service.get_available_deployer()
-    if not deployer:
-        await subscriptions_col().update_one(
-            {"_id": subscription_id},
-            {"$set": {"deploy_status": "no_capacity", "deploy_progress": 0, "deploy_message": "No deployer capacity available"}},
-        )
-        return
+    instead of the purchase request blocking until deploy finishes.
 
+    Tries deployers in deploy_id order (1, 2, 3, ...). If a deployer has no
+    free slot, or the deploy itself fails for any reason (HTTP error,
+    timeout, exception, bad stream, etc.), that deployer is marked as tried
+    and the next one in line is attempted, until one succeeds or all have
+    been exhausted.
+    """
+    settings = get_settings()
+    ordered_deployers = sorted(settings.deployers, key=lambda d: d.get("deploy_id", 0))
     app_name = deployer_service.generate_unique_app_name(stake_username)
-    await subscriptions_col().update_one(
-        {"_id": subscription_id},
-        {"$set": {"app_name": app_name, "deploy_status": "deploying", "deploy_progress": 5, "deploy_message": "Starting deployment..."}},
-    )
 
     async def on_update(data: dict) -> None:
         message = str(data.get("message") or data.get("status") or "")[:200]
@@ -125,28 +122,69 @@ async def _run_deploy_and_persist(
         except Exception:
             logger.exception(f"[DEPLOY] Failed to persist progress for subscription {subscription_id}")
 
-    try:
-        ok, res = await deployer_service.deploy_container(
-            session_token,
-            app_name,
-            deployer["url"],
-            deployer["token"],
-            mirror_site,
-            claimer_settings=claimer_settings,
-            on_update=on_update,
+    tried_urls: set[str] = set()
+    last_message = "No deployer capacity available"
+
+    for _ in range(len(ordered_deployers)):
+        deployer = await deployer_service.get_available_deployer(tried_urls)
+        if not deployer:
+            break
+        tried_urls.add(deployer["url"])
+
+        await subscriptions_col().update_one(
+            {"_id": subscription_id},
+            {
+                "$set": {
+                    "app_name": app_name,
+                    "deploy_status": "deploying",
+                    "deploy_progress": 5,
+                    "deploy_message": f"Starting deployment on deployer {deployer.get('deploy_id', deployer['url'])}...",
+                }
+            },
         )
-    except Exception as e:
-        logger.exception(f"[DEPLOY] Background deploy crashed for subscription {subscription_id}: {e}")
-        ok, res = False, {"error": str(e)}
+
+        try:
+            ok, res = await deployer_service.deploy_container(
+                session_token,
+                app_name,
+                deployer["url"],
+                deployer["token"],
+                mirror_site,
+                claimer_settings=claimer_settings,
+                on_update=on_update,
+            )
+        except Exception as e:
+            logger.exception(f"[DEPLOY] Background deploy crashed for subscription {subscription_id}: {e}")
+            ok, res = False, {"error": str(e)}
+
+        if ok:
+            await subscriptions_col().update_one(
+                {"_id": subscription_id},
+                {
+                    "$set": {
+                        "deploy_url": deployer["url"],
+                        "deploy_status": "deployed",
+                        "deploy_progress": 100,
+                        "deploy_message": "Deployed successfully",
+                    }
+                },
+            )
+            return
+
+        last_message = str(res.get("error", "Deployment failed"))[:200]
+        logger.warning(
+            f"[DEPLOY] Deployer {deployer.get('deploy_id', deployer['url'])} failed for "
+            f"subscription {subscription_id}: {last_message}. Trying next deployer."
+        )
 
     await subscriptions_col().update_one(
         {"_id": subscription_id},
         {
             "$set": {
-                "deploy_url": deployer["url"] if ok else None,
-                "deploy_status": "deployed" if ok else "failed",
-                "deploy_progress": 100 if ok else 0,
-                "deploy_message": "Deployed successfully" if ok else str(res.get("error", "Deployment failed"))[:200],
+                "deploy_url": None,
+                "deploy_status": "failed",
+                "deploy_progress": 0,
+                "deploy_message": last_message,
             }
         },
     )

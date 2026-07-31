@@ -98,3 +98,98 @@ async def test_purchase_with_points_kicks_off_background_deploy_with_progress(mo
     assert updated["deploy_progress"] == 100
 
     settings.API_CLAIMER_DEPLOYERS = original
+
+
+@pytest.mark.asyncio
+async def test_deploy_falls_back_to_next_deployer_on_failure(monkeypatch):
+    """If deployer 1 fails (slot full, HTTP error, timeout, etc.), the deploy
+    should automatically retry on deployer 2, then deployer 3, and so on."""
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    original = settings.API_CLAIMER_DEPLOYERS
+    settings.API_CLAIMER_DEPLOYERS = (
+        '[{"deploy_id": 1, "url": "https://deployer1.example.com", "token": "tok1", "limit": 100},'
+        ' {"deploy_id": 2, "url": "https://deployer2.example.com", "token": "tok2", "limit": 100},'
+        ' {"deploy_id": 3, "url": "https://deployer3.example.com", "token": "tok3", "limit": 100}]'
+    )
+
+    async def fake_activate(username, hours, api_url):
+        return True
+
+    attempted_urls = []
+
+    async def fake_deploy_container(session_token, app_name, deploy_url, auth_token, mirror_site, **kwargs):
+        attempted_urls.append(deploy_url)
+        if deploy_url != "https://deployer3.example.com":
+            return False, {"error": f"deploy failed on {deploy_url}"}
+        return True, {"status": "completed"}
+
+    monkeypatch.setattr(subscription_service.claimer_service, "activate", fake_activate)
+    monkeypatch.setattr(deployer_service, "deploy_container", fake_deploy_container)
+
+    user_id = await _make_user(100.0)
+    sub = await subscription_service.purchase_with_points(
+        user_id=user_id,
+        product_type="api_claimer",
+        plan_key="2d",
+        stake_username="tester",
+        session_token="realtoken",
+        idempotency_key="deploy-fallback-key",
+    )
+
+    await asyncio.sleep(0.05)
+
+    updated = await subscriptions_col().find_one({"_id": sub["_id"]})
+    assert updated["deploy_status"] == "deployed"
+    assert updated["deploy_url"] == "https://deployer3.example.com"
+    assert attempted_urls == [
+        "https://deployer1.example.com",
+        "https://deployer2.example.com",
+        "https://deployer3.example.com",
+    ]
+
+    settings.API_CLAIMER_DEPLOYERS = original
+
+
+@pytest.mark.asyncio
+async def test_deploy_marks_failed_only_after_all_deployers_exhausted(monkeypatch):
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    original = settings.API_CLAIMER_DEPLOYERS
+    settings.API_CLAIMER_DEPLOYERS = (
+        '[{"deploy_id": 1, "url": "https://deployer1.example.com", "token": "tok1", "limit": 100},'
+        ' {"deploy_id": 2, "url": "https://deployer2.example.com", "token": "tok2", "limit": 100}]'
+    )
+
+    async def fake_activate(username, hours, api_url):
+        return True
+
+    attempted_urls = []
+
+    async def fake_deploy_container(session_token, app_name, deploy_url, auth_token, mirror_site, **kwargs):
+        attempted_urls.append(deploy_url)
+        return False, {"error": f"deploy failed on {deploy_url}"}
+
+    monkeypatch.setattr(subscription_service.claimer_service, "activate", fake_activate)
+    monkeypatch.setattr(deployer_service, "deploy_container", fake_deploy_container)
+
+    user_id = await _make_user(100.0)
+    sub = await subscription_service.purchase_with_points(
+        user_id=user_id,
+        product_type="api_claimer",
+        plan_key="2d",
+        stake_username="tester",
+        session_token="realtoken",
+        idempotency_key="deploy-all-fail-key",
+    )
+
+    await asyncio.sleep(0.05)
+
+    updated = await subscriptions_col().find_one({"_id": sub["_id"]})
+    assert updated["deploy_status"] == "failed"
+    assert updated["deploy_url"] is None
+    assert attempted_urls == ["https://deployer1.example.com", "https://deployer2.example.com"]
+
+    settings.API_CLAIMER_DEPLOYERS = original
