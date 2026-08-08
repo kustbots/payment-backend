@@ -12,7 +12,7 @@ from app.core.logging import logger
 from app.db.indexes import create_indexes
 from app.routers import admin, auth, payments, referrals, subscriptions, telegram_auth, wallet
 from app.services.telegram_auth_service import register_webhook
-from app.workers import oxapay_poller
+from app.workers import oxapay_poller, subscription_expiry
 
 
 @asynccontextmanager
@@ -20,11 +20,15 @@ async def lifespan(app: FastAPI):
     await create_indexes()
     await register_webhook()
     poller_task = asyncio.create_task(oxapay_poller.run_forever())
+    expiry_task = asyncio.create_task(subscription_expiry.run_forever())
     logger.info("payment-backend startup complete")
     yield
     poller_task.cancel()
+    expiry_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await poller_task
+    with contextlib.suppress(asyncio.CancelledError):
+        await expiry_task
 
 
 app = FastAPI(title="Payment Backend API", version="1.0.0", lifespan=lifespan)
